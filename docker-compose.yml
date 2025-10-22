@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  chef-18-8-11:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CHEF_VERSION: "18.8.11"
+    image: chef-test:18.8.11
+    container_name: chef-18-8-11
+    environment:
+      - CHEF_LICENSE=accept-silent
+    volumes:
+      - ./shared:/shared
+      - ./cookbooks:/cookbooks
+    command: powershell -Command "chef-client -z -o recipe[test_recipe] --chef-license accept-silent"
+
+  chef-18-8-46:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CHEF_VERSION: "18.8.46"
+    image: chef-test:18.8.46
+    container_name: chef-18-8-46
+    environment:
+      - CHEF_LICENSE=accept-silent
+    volumes:
+      - ./shared:/shared
+      - ./cookbooks:/cookbooks
+    command: powershell -Command "chef-client -z -o recipe[test_recipe] --chef-license accept-silent"

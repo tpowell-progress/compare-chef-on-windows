@@ -1,0 +1,7 @@
+name 'test_recipe'
+maintainer 'Test'
+maintainer_email 'test@example.com'
+license 'All Rights Reserved'
+description 'Test recipe to output Chef version'
+version '0.1.0'
+chef_version '>= 16.0'
