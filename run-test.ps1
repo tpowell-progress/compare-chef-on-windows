@@ -33,6 +33,47 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "`n=== Running Chef $ChefVersion1 container ===" -ForegroundColor Green
+
+# First, verify Chef installation and search for Chef.PowerShell.Wrapper.dll before running chef
+Write-Host "Verifying Chef installation and searching for Chef.PowerShell.Wrapper.dll..." -ForegroundColor Yellow
+docker run --rm `
+    -v "${PWD}\shared:C:\shared" `
+    chef-test:$ChefVersion1 `
+    powershell -Command {
+        Write-Host '=== Chef Installation Verification ==='
+        $chefVersion = (chef-client --version) -replace 'Chef Infra Client: ', ''
+        Write-Host "Chef Version: $chefVersion"
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $computerName = $env:COMPUTERNAME
+        
+        Write-Host ''
+        Write-Host '=== Searching for Chef.PowerShell.Wrapper.dll ==='
+        $wrapperDlls = Get-ChildItem -Path 'C:\opscode\chef' -Include 'Chef.PowerShell.Wrapper.dll' -Recurse -ErrorAction SilentlyContinue
+        
+        $wrapperInfo = if ($wrapperDlls) {
+            $wrapperDlls | ForEach-Object {
+                Write-Host "Found: $($_.FullName)"
+                Write-Host "  Size: $($_.Length) bytes"
+                Write-Host "  LastWriteTime: $($_.LastWriteTime)"
+                "  Path: $($_.FullName)`n  Size: $($_.Length) bytes`n  LastWriteTime: $($_.LastWriteTime)"
+            } | Out-String
+        } else {
+            Write-Host 'Chef.PowerShell.Wrapper.dll not found'
+            '  Chef.PowerShell.Wrapper.dll not found'
+        }
+        
+        $chefClientPath = Get-Command chef-client | Select-Object -ExpandProperty Source
+        $output = "Chef Version: $chefVersion`nComputer Name: $computerName`nTimestamp: $timestamp`nChef Client Path: $chefClientPath`n`nChef.PowerShell.Wrapper.dll Search Results (Pre-Chef Run):`n$wrapperInfo"
+        
+        $outputFile = "C:\shared\chef-$chefVersion.txt"
+        Write-Host ''
+        Write-Host "Writing initial results to $outputFile"
+        $output | Out-File -FilePath $outputFile -Encoding UTF8
+        Write-Host ''
+    }
+
+# Now run the actual chef recipe
+Write-Host "Running Chef recipe..." -ForegroundColor Yellow
 docker run --rm `
     -e CHEF_LICENSE=accept-silent `
     -v "${PWD}\shared:C:\shared" `
@@ -55,6 +96,47 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "`n=== Running Chef $ChefVersion2 container ===" -ForegroundColor Green
+
+# First, verify Chef installation and search for Chef.PowerShell.Wrapper.dll before running chef
+Write-Host "Verifying Chef installation and searching for Chef.PowerShell.Wrapper.dll..." -ForegroundColor Yellow
+docker run --rm `
+    -v "${PWD}\shared:C:\shared" `
+    chef-test:$ChefVersion2 `
+    powershell -Command {
+        Write-Host '=== Chef Installation Verification ==='
+        $chefVersion = (chef-client --version) -replace 'Chef Infra Client: ', ''
+        Write-Host "Chef Version: $chefVersion"
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $computerName = $env:COMPUTERNAME
+        
+        Write-Host ''
+        Write-Host '=== Searching for Chef.PowerShell.Wrapper.dll ==='
+        $wrapperDlls = Get-ChildItem -Path 'C:\opscode\chef' -Include 'Chef.PowerShell.Wrapper.dll' -Recurse -ErrorAction SilentlyContinue
+        
+        $wrapperInfo = if ($wrapperDlls) {
+            $wrapperDlls | ForEach-Object {
+                Write-Host "Found: $($_.FullName)"
+                Write-Host "  Size: $($_.Length) bytes"
+                Write-Host "  LastWriteTime: $($_.LastWriteTime)"
+                "  Path: $($_.FullName)`n  Size: $($_.Length) bytes`n  LastWriteTime: $($_.LastWriteTime)"
+            } | Out-String
+        } else {
+            Write-Host 'Chef.PowerShell.Wrapper.dll not found'
+            '  Chef.PowerShell.Wrapper.dll not found'
+        }
+        
+        $chefClientPath = Get-Command chef-client | Select-Object -ExpandProperty Source
+        $output = "Chef Version: $chefVersion`nComputer Name: $computerName`nTimestamp: $timestamp`nChef Client Path: $chefClientPath`n`nChef.PowerShell.Wrapper.dll Search Results (Pre-Chef Run):`n$wrapperInfo"
+        
+        $outputFile = "C:\shared\chef-$chefVersion.txt"
+        Write-Host ''
+        Write-Host "Writing initial results to $outputFile"
+        $output | Out-File -FilePath $outputFile -Encoding UTF8
+        Write-Host ''
+    }
+
+# Now run the actual chef recipe
+Write-Host "Running Chef recipe..." -ForegroundColor Yellow
 docker run --rm `
     -e CHEF_LICENSE=accept-silent `
     -v "${PWD}\shared:C:\shared" `
