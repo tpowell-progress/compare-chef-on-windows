@@ -6,3 +6,5 @@ README.md
 shared/
 *.log
 *.tmp
+*.msi
+!chef-installer.msi

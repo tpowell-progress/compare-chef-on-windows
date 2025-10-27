@@ -1,8 +1,6 @@
 # escape=`
-FROM mcr.microsoft.com/windows/servercore:ltsc2022
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
 
-# Set Chef version as build argument with default value
-ARG CHEF_VERSION=18.8.11
 ARG INSTALL_DUMPBIN=False
 ENV INSTALL_DUMPBIN=${INSTALL_DUMPBIN}
 
@@ -32,13 +30,13 @@ RUN if ($env:INSTALL_DUMPBIN -eq 'True') { `
         Write-Host 'Skipping Visual Studio Build Tools installation (INSTALL_DUMPBIN=False)'; `
     }
 
-# Install Chef via Omnitruck
-RUN Write-Host \"Installing Chef version $env:CHEF_VERSION...\"; `
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; `
-    $script = (New-Object System.Net.WebClient).DownloadString('https://omnitruck.chef.io/install.ps1'); `
-    $script = $script -replace '^\[Console\]::OutputEncoding.*$', '' -replace 'New-Object -typename System.Text.ASCIIEncoding', 'New-Object -typename System.Text.UTF8Encoding'; `
-    Invoke-Expression $script; `
-    Install-Project -project chef -version $env:CHEF_VERSION -channel stable
+# Copy MSI file to container
+COPY chef-installer.msi C:\chef-installer.msi
+
+# Install Chef from MSI
+RUN Write-Host 'Installing Chef from MSI...'; `
+    Start-Process msiexec.exe -ArgumentList '/i', 'C:\chef-installer.msi', '/qn', '/norestart' -Wait; `
+    Remove-Item C:\chef-installer.msi -Force
 
 # Accept Chef license
 ENV CHEF_LICENSE=accept-silent

@@ -1,4 +1,4 @@
-# Test recipe to output Chef version to file with timestamp
+# Test recipe to output Chef version to file (Ruby-only version)
 
 chef_version = Chef::VERSION
 timestamp = Time.now.strftime("%Y%m%d-%H%M%S")
@@ -8,20 +8,18 @@ log "Chef version: #{chef_version}" do
   level :info
 end
 
-log "Creating timestamped output file: #{output_file}" do
+log "Creating output file: #{output_file}" do
   level :info
 end
 
-# Use Ruby file I/O to create timestamped output file
-# This approach avoids PowerShell DLL dependency issues
+# Use Ruby file I/O instead of PowerShell to avoid DLL issues
 file output_file do
   content <<-EOL
 ======================================================================
-Chef Recipe Execution Report  
+Chef Recipe Execution Report
 ======================================================================
 Chef Version: #{chef_version}
 Ruby Timestamp: #{timestamp}
-Execution Time: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}
 Recipe Status: SUCCESS
 Output File: #{output_file}
 ======================================================================
@@ -31,13 +29,6 @@ This file was created by the Chef test recipe to verify:
 2. File I/O operations are successful  
 3. Recipe execution completed without errors
 4. Timestamp functionality is operational
-5. Timestamped file naming is working
-
-Recipe Details:
-- Used Ruby file resource instead of PowerShell script
-- Avoids Chef PowerShell wrapper DLL dependencies
-- Creates uniquely timestamped files for each run
-- Demonstrates successful Chef recipe execution
 
 Generated at: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}
 ======================================================================
