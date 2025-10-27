@@ -28,6 +28,8 @@ This project sets up Windows Docker containers with Windows Server Core 2022 and
 
 ### Option 1: Using the PowerShell Script (Recommended)
 
+#### Test Two Versions (Default)
+
 Run the main test script with default versions:
 
 ```powershell
@@ -39,6 +41,50 @@ Or specify custom Chef versions:
 ```powershell
 .\run-test.ps1 -ChefVersion1 "18.8.11" -ChefVersion2 "18.8.46"
 ```
+
+#### Test a Single Version
+
+```powershell
+.\run-test.ps1 -ChefVersion1 "18.8.11" -SingleVersion
+```
+
+#### Test with an MSI File
+
+Place your Chef MSI file in the project root and run:
+
+```powershell
+.\run-test.ps1 -MsiFile "chef-18.8.11-1-x64.msi"
+```
+
+Or with a full path:
+
+```powershell
+.\run-test.ps1 -MsiFile "C:\downloads\chef-18.8.11-1-x64.msi"
+```
+
+#### Enable DLL Diagnostics
+
+Search for DLLs without running dumpbin:
+
+```powershell
+.\run-test.ps1 -FindDLLs
+```
+
+Search for DLLs and analyze Chef.PowerShell.Wrapper.dll with dumpbin:
+
+```powershell
+.\run-test.ps1 -FindDLLs -UseDumpbin
+```
+
+The script will search for the following DLLs:
+- KERNEL32.dll
+- VCRUNTIME140.dll
+- api-ms-win-crt-runtime-l1-1-0.dll
+- api-ms-win-crt-heap-l1-1-0.dll
+- MSVCP140.dll
+- mscoree.dll
+
+Note: Using `-UseDumpbin` will install Visual Studio Build Tools (~6GB) which significantly increases build time. Use this only when you need detailed dependency analysis.
 
 ### Option 2: Using Docker Compose
 
@@ -74,38 +120,99 @@ Get-ChildItem .\shared\chef-*.txt | ForEach-Object { Get-Content $_ }
 ## What the Script Does
 
 1. **Creates Shared Volume**: Sets up a directory for output files
-2. **Builds Docker Images**: Creates Windows Server Core 2022 images with specified Chef versions installed via Omnitruck
+2. **Builds Docker Images**: Creates Windows Server Core 2022 images with specified Chef versions installed via:
+   - Omnitruck (default for version numbers)
+   - MSI file (when using -MsiFile parameter)
 3. **Runs Containers**: Executes Chef client in zero mode with the test recipe
-4. **Searches for Chef.PowerShell.Wrapper.dll**: Before running Chef recipes, the script searches for this DLL and outputs location, size, and timestamp
-5. **Test Recipe Execution**: The recipe runs a PowerShell script that:
+4. **Searches for DLLs** (optional, with -FindDLLs flag): 
+   - Chef.PowerShell.Wrapper.dll (in C:\opscode\chef)
+   - KERNEL32.dll
+   - VCRUNTIME140.dll
+   - api-ms-win-crt-runtime-l1-1-0.dll
+   - api-ms-win-crt-heap-l1-1-0.dll
+   - MSVCP140.dll
+   - mscoree.dll
+5. **Runs dumpbin** (optional, with -UseDumpbin flag): Analyzes Chef.PowerShell.Wrapper.dll dependencies
+6. **Test Recipe Execution**: The recipe runs a PowerShell script that:
    - Retrieves the current Chef version
-   - Searches for Chef.PowerShell.Wrapper.dll
-   - Outputs version and DLL information to a file on the shared volume
+   - Optionally searches for DLLs and runs diagnostic tools
+   - Outputs version and diagnostic information to a file on the shared volume
    - File is named `chef-{version}.txt`
-6. **Validates Results**: Checks the shared volume for both output files and displays their contents
+7. **Validates Results**: Checks the shared volume for output files and displays their contents
+
+## Usage Modes
+
+### Two Version Comparison (Default)
+Compare two Chef versions installed via Omnitruck:
+```powershell
+.\run-test.ps1 -ChefVersion1 "18.8.11" -ChefVersion2 "18.8.46"
+```
+
+### Single Version Test
+Test a single Chef version:
+```powershell
+.\run-test.ps1 -ChefVersion1 "17.10.0" -SingleVersion
+```
+
+### MSI Installation Test
+Test a Chef MSI installer:
+```powershell
+.\run-test.ps1 -MsiFile "chef-18.8.11-1-x64.msi"
+```
+
+### With DLL Diagnostics
+Test with DLL search (fast):
+```powershell
+.\run-test.ps1 -FindDLLs
+```
+
+Test with DLL search and dumpbin analysis (slow, installs VS Build Tools):
+```powershell
+.\run-test.ps1 -FindDLLs -UseDumpbin
+```
+
+Combine with MSI testing:
+```powershell
+.\run-test.ps1 -MsiFile "chef-18.8.11-1-x64.msi" -FindDLLs -UseDumpbin
+```
 
 ## Output Files
 
 Each container generates a file named `chef-{version}.txt` in the `shared` directory containing:
 
 - Chef version
+- Installation method (Omnitruck or MSI)
 - Computer name (container name)
 - Timestamp
 - Chef client path
-- Chef.PowerShell.Wrapper.dll search results (path, size, last write time)
+- Chef.PowerShell.Wrapper.dll search results (if -FindDLLs is used)
+- Other DLL search results (if -FindDLLs is used)
+- Dumpbin dependency analysis (if -UseDumpbin is used)
 
 Example output file content:
 
 ```
 Chef Version: 18.8.11
+Installation Method: Omnitruck
 Computer Name: CONTAINER123
 Timestamp: 2025-10-22 10:30:45
 Chef Client Path: C:\opscode\chef\bin\chef-client
 
-Chef.PowerShell.Wrapper.dll Search Results:
-  Path: C:\opscode\chef\embedded\lib\ruby\gems\3.1.0\gems\chef-18.8.11\lib\Chef.PowerShell.Wrapper.dll
+Chef.PowerShell.Wrapper.dll Search Results (Pre-Chef Run):
+  Path: C:\opscode\chef\embedded\lib\ruby\gems\3.1.0\gems\chef-powershell-18.1.0\bin\ruby_bin_folder\AMD64\Chef.PowerShell.Wrapper.dll
   Size: 12345 bytes
   LastWriteTime: 10/22/2025 10:15:30
+
+Dumpbin Output:
+Microsoft (R) COFF/PE Dumper Version 14.35.32215.0
+...
+
+DLL Search Results:
+KERNEL32.dll found at:
+  C:\Windows\System32\KERNEL32.dll
+VCRUNTIME140.dll found at:
+  C:\opscode\chef\embedded\bin\VCRUNTIME140.dll
+...
 ```
 
 ## Troubleshooting

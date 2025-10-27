@@ -7,47 +7,39 @@ log "Chef version: #{chef_version}" do
   level :info
 end
 
-# Execute PowerShell script to output Chef version and diagnostic information
-powershell_script 'output_chef_version' do
+# Execute PowerShell script to confirm Chef recipe ran successfully
+powershell_script 'confirm_chef_run' do
   code <<-EOH
     $chefVersion = "#{chef_version}"
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $computerName = $env:COMPUTERNAME
     
-    # Search for Chef.PowerShell.Wrapper.dll
-    Write-Host "Searching for Chef.PowerShell.Wrapper.dll during Chef run..."
-    $wrapperDlls = Get-ChildItem -Path "C:\\opscode\\chef" -Include "Chef.PowerShell.Wrapper.dll" -Recurse -ErrorAction SilentlyContinue
+    # Find the most recent chef output file for this version
+    $fileTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $outputFile = Get-ChildItem "C:\\shared\\chef-$chefVersion-*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
     
-    $wrapperInfo = if ($wrapperDlls) {
-        $wrapperDlls | ForEach-Object {
-            "  Path: $($_.FullName)`n  Size: $($_.Length) bytes`n  LastWriteTime: $($_.LastWriteTime)"
-        } | Out-String
-    } else {
-        "  Chef.PowerShell.Wrapper.dll not found"
+    if (-not $outputFile) {
+        # Fallback if file doesn't exist yet (shouldn't happen, but just in case)
+        $outputFile = "C:\\shared\\chef-$chefVersion-$fileTimestamp.txt"
     }
     
-    $outputFile = "C:\\shared\\chef-$chefVersion.txt"
-    
-    # Append to existing file or create new one
+    # Append to existing file
     $separator = "`n" + "=" * 70 + "`n"
     $additionalOutput = @"
 $separator
-Chef Recipe Execution:
+Chef Recipe Execution Completed:
 Timestamp: $timestamp
 Computer Name: $computerName
-
-Chef.PowerShell.Wrapper.dll Search Results (During Chef Run):
-$wrapperInfo
+Status: SUCCESS
 "@
     
-    Write-Host "Appending Chef run results to $outputFile"
+    Write-Host "Appending Chef run completion to $outputFile"
     $additionalOutput | Out-File -FilePath $outputFile -Encoding UTF8 -Append
-    Write-Host "Successfully appended Chef run information"
-    Get-Content $outputFile
+    Write-Host "Chef recipe completed successfully"
   EOH
   action :run
 end
 
-log "Chef version information written to #{output_file}" do
+log "Chef recipe completed for version #{chef_version}" do
   level :info
 end

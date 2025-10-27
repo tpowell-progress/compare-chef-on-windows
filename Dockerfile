@@ -3,9 +3,34 @@ FROM mcr.microsoft.com/windows/servercore:ltsc2022
 
 # Set Chef version as build argument with default value
 ARG CHEF_VERSION=18.8.11
+ARG INSTALL_DUMPBIN=False
+ENV INSTALL_DUMPBIN=${INSTALL_DUMPBIN}
 
 # Set up PowerShell execution policy
 SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
+
+# Conditionally install Visual Studio Build Tools for dumpbin
+RUN if ($env:INSTALL_DUMPBIN -eq 'True') { `
+        Write-Host 'Installing Visual Studio Build Tools for dumpbin...'; `
+        Write-Host 'Downloading installer...'; `
+        Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile 'vs_buildtools.exe'; `
+        Write-Host 'Running VS Build Tools installer (this will take several minutes)...'; `
+        $process = Start-Process vs_buildtools.exe -ArgumentList '--quiet', '--wait', '--norestart', '--nocache', '--installPath', \"${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\", '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended' -Wait -PassThru; `
+        Write-Host \"Installer exit code: $($process.ExitCode)\"; `
+        Remove-Item vs_buildtools.exe -Force -ErrorAction SilentlyContinue; `
+        Write-Host 'Attempting to add dumpbin to PATH if it was installed...'; `
+        $vsPath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC'; `
+        if (Test-Path $vsPath) { `
+            $msvcVersion = (Get-ChildItem $vsPath | Sort-Object Name -Descending | Select-Object -First 1).Name; `
+            $dumpbinPath = Join-Path (Join-Path (Join-Path $vsPath $msvcVersion) 'bin\Hostx64') 'x64'; `
+            [Environment]::SetEnvironmentVariable('PATH', $env:PATH + ';' + $dumpbinPath, [EnvironmentVariableTarget]::Machine); `
+            Write-Host \"Added dumpbin to PATH: $dumpbinPath\"; `
+        } else { `
+            Write-Host 'VS Build Tools directory not found - dumpbin may not be available'; `
+        } `
+    } else { `
+        Write-Host 'Skipping Visual Studio Build Tools installation (INSTALL_DUMPBIN=False)'; `
+    }
 
 # Install Chef via Omnitruck
 RUN Write-Host \"Installing Chef version $env:CHEF_VERSION...\"; `
@@ -17,21 +42,6 @@ RUN Write-Host \"Installing Chef version $env:CHEF_VERSION...\"; `
 
 # Accept Chef license
 ENV CHEF_LICENSE=accept-silent
-
-# Verify Chef installation and search for Chef.PowerShell.Wrapper.dll
-RUN Write-Host 'Verifying Chef installation...'; `
-    chef-client --version; `
-    Write-Host 'Searching for Chef.PowerShell.Wrapper.dll...'; `
-    $wrapperDlls = Get-ChildItem -Path C:\opscode\chef -Include 'Chef.PowerShell.Wrapper.dll' -Recurse -ErrorAction SilentlyContinue; `
-    if ($wrapperDlls) { `
-        $wrapperDlls | ForEach-Object { `
-            Write-Host "Found: $($_.FullName)"; `
-            Write-Host "  Size: $($_.Length) bytes"; `
-            Write-Host "  LastWriteTime: $($_.LastWriteTime)"; `
-        } `
-    } else { `
-        Write-Host 'Chef.PowerShell.Wrapper.dll not found'; `
-    }
 
 # Create directories for Chef
 RUN New-Item -ItemType Directory -Force -Path C:\chef; `
