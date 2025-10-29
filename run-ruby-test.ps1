@@ -38,6 +38,7 @@ $ErrorActionPreference = "Stop"
 
 # Configuration
 $BaseImage = "mcr.microsoft.com/windows/servercore:ltsc2022"
+$RubyImageTag = "ruby-devkit:$RubyVersion-windows"
 $RubyInstallerUrl = "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-$RubyVersion-1/rubyinstaller-devkit-$RubyVersion-1-x64.exe"
 $RubyInstallPath = "C:\Ruby$($RubyVersion.Replace('.', ''))"
 
@@ -65,72 +66,107 @@ function Test-DockerAvailable {
     }
 }
 
+function Test-RubyImageExists {
+    param([string]$ImageTag)
+    
+    try {
+        $images = docker images --format "table {{.Repository}}:{{.Tag}}" | Select-String -Pattern "^$ImageTag$"
+        if ($images) {
+            Write-Host "Found existing Ruby image: $ImageTag" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "Ruby image $ImageTag not found, will build new image" -ForegroundColor Yellow
+        return $false
+    }
+    catch {
+        Write-Host "Error checking for Ruby image: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Build-RubyImage {
+    param([string]$ImageTag)
+    
+    Write-Status "Building Ruby $RubyVersion Docker image"
+    
+    # Create Dockerfile for Ruby installation
+    $dockerfile = @"
+FROM $BaseImage
+
+# Set environment variables
+ENV RUBY_URL=$RubyInstallerUrl
+ENV RUBY_INSTALL_PATH=$RubyInstallPath
+
+# Download and install Ruby with Devkit
+RUN powershell -Command "Write-Host 'Downloading Ruby installer...'; Invoke-WebRequest -Uri `$env:RUBY_URL -OutFile C:\rubyinstaller.exe -UseBasicParsing"
+RUN powershell -Command "Write-Host 'Installing Ruby $RubyVersion with Devkit...'; Start-Process -FilePath C:\rubyinstaller.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NOCLOSEAPPLICATIONS', '/NORESTART', '/NOCANCEL', '/SP-', '/DIR=`$env:RUBY_INSTALL_PATH', '/TASKS=assocfiles,modpath,devkit' -Wait -NoNewWindow"
+RUN powershell -Command "Remove-Item C:\rubyinstaller.exe -Force"
+
+# Update PATH
+RUN setx PATH "%PATH%;$RubyInstallPath\bin" /M
+
+# Test Ruby installation
+RUN powershell -Command "`$env:PATH = '$RubyInstallPath\bin;' + `$env:PATH; ruby --version; gem --version"
+
+# Set default shell
+SHELL ["powershell", "-Command"]
+"@
+
+    try {
+        # Create temporary directory for Docker build
+        $buildDir = Join-Path $env:TEMP "ruby-docker-build"
+        if (-not (Test-Path $buildDir)) {
+            New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
+        }
+        
+        $dockerfilePath = Join-Path $buildDir "Dockerfile"
+        $dockerfile | Out-File -FilePath $dockerfilePath -Encoding utf8
+        
+        Write-Host "Created Dockerfile at: $dockerfilePath"
+        Write-Host "Building image: $ImageTag"
+        
+        # Build the Docker image
+        $buildResult = docker build -t $ImageTag $buildDir 2>&1
+        
+        if ($LASTEXITCODE -ne 0) {
+            throw "Docker build failed with exit code: $LASTEXITCODE`n$buildResult"
+        }
+        
+        Write-Status "Ruby image $ImageTag built successfully" "Green"
+        return $true
+        
+    }
+    catch {
+        Write-Error-Status "Failed to build Ruby image: $($_.Exception.Message)"
+        throw
+    }
+    finally {
+        # Cleanup build directory
+        if (Test-Path $buildDir) {
+            Remove-Item $buildDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Create-InstallationScript {
-    Write-Status "Creating Ruby and chef-powershell installation script"
+    Write-Status "Creating chef-powershell installation script"
     
     $installScript = @"
-# Ruby and chef-powershell installation script for container
-Write-Host "=== Starting Ruby $RubyVersion and chef-powershell $ChefPowerShellVersion installation ==="
+# chef-powershell installation script for container
+Write-Host "=== Starting chef-powershell $ChefPowerShellVersion installation ==="
 
-# Download Ruby installer
-Write-Host "Downloading Ruby installer..."
-`$rubyUrl = "$RubyInstallerUrl"
-`$installerPath = "C:\rubyinstaller.exe"
-
-try {
-    Invoke-WebRequest -Uri `$rubyUrl -OutFile `$installerPath -UseBasicParsing
-    Write-Host "Downloaded Ruby installer successfully"
-} catch {
-    Write-Host "Failed to download Ruby installer: `$(`$_.Exception.Message)" -ForegroundColor Red
-    exit 1
-}
-
-# Install Ruby with Devkit silently
-Write-Host "Installing Ruby $RubyVersion with Devkit..."
-`$installArgs = @(
-    "/VERYSILENT",
-    "/SUPPRESSMSGBOXES",
-    "/NOCLOSEAPPLICATIONS",
-    "/NORESTART", 
-    "/NOCANCEL",
-    "/SP-",
-    "/DIR=$RubyInstallPath",
-    "/TASKS=assocfiles,modpath,devkit"
-)
-
-try {
-    Write-Host "Running installer with args: `$(`$installArgs -join ' ')"
-    `$process = Start-Process -FilePath `$installerPath -ArgumentList `$installArgs -Wait -PassThru -NoNewWindow
-    Write-Host "Installer process completed with exit code: `$(`$process.ExitCode)"
-    if (`$process.ExitCode -ne 0) {
-        throw "Ruby installer failed with exit code: `$(`$process.ExitCode)"
-    }
-    Write-Host "Ruby installed successfully!" -ForegroundColor Green
-} catch {
-    Write-Host "Ruby installation failed: `$(`$_.Exception.Message)" -ForegroundColor Red
-    exit 1
-}
-
-# Update PATH and refresh environment
+# Set Ruby path
 `$rubyBinPath = "$RubyInstallPath\bin"
 `$env:PATH = "`$rubyBinPath;`$env:PATH"
-Write-Host "Updated PATH to include: `$rubyBinPath"
-
-# Initialize devkit if needed
-Write-Host "Initializing Ruby devkit..."
-try {
-    & "`$rubyBinPath\ridk.exe" enable
-    Write-Host "Devkit initialized successfully" -ForegroundColor Green
-} catch {
-    Write-Host "Warning: Could not initialize devkit" -ForegroundColor Yellow
-}
 
 # Verify Ruby installation
+Write-Host "Verifying Ruby installation..."
 try {
     `$rubyVersion = & "`$rubyBinPath\ruby.exe" --version
     Write-Host "Ruby verification: `$rubyVersion" -ForegroundColor Green
 } catch {
-    Write-Host "Warning: Could not verify Ruby installation" -ForegroundColor Yellow
+    Write-Host "Error: Ruby not found in image" -ForegroundColor Red
+    exit 1
 }
 
 # Install chef-powershell gem
@@ -163,9 +199,11 @@ try {
     # Test requiring the gem
     `$testScript = @'
 begin
-  require \"chef/powershell\"
+  require \"chef-powershell\"
   puts \"chef-powershell loaded successfully\"
   puts \"Chef::PowerShell::VERSION = #{Chef::PowerShell::VERSION}\" if defined?(Chef::PowerShell::VERSION)
+  puts \"include ChefPowerShell::ChefPowerShellModule::PowerShellExec\"
+  puts \"powershell_exec('Get-Date')\"
 rescue LoadError => e
   puts \"Failed to load chef-powershell: #{e.message}\"
   exit 1
@@ -202,9 +240,14 @@ Write-Host ""
 }
 
 function Run-DockerContainer {
-    Write-Status "Creating and running Windows Server Core 2022 container"
+    Write-Status "Setting up Ruby $RubyVersion container"
     
     try {
+        # Check if Ruby image exists, build if needed
+        if (-not (Test-RubyImageExists -ImageTag $RubyImageTag)) {
+            Build-RubyImage -ImageTag $RubyImageTag
+        }
+        
         # Check if container already exists and remove it
         $existingContainer = docker ps -a --filter "name=$ContainerName" --format "{{.Names}}" 2>$null
         if ($existingContainer -eq $ContainerName) {
@@ -212,7 +255,7 @@ function Run-DockerContainer {
             docker rm -f $ContainerName 2>$null | Out-Null
         }
         
-        # Create installation script in a dedicated directory
+        # Create chef-powershell installation script in a dedicated directory
         $scriptDir = Join-Path $env:TEMP "ruby-container-setup"
         if (-not (Test-Path $scriptDir)) {
             New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
@@ -222,14 +265,14 @@ function Run-DockerContainer {
         $scriptPath = Join-Path $scriptDir "install-script.ps1"
         $installScript | Out-File -FilePath $scriptPath -Encoding UTF8
         
-        Write-Host "Created installation script at: $scriptPath"
+        Write-Host "Created chef-powershell installation script at: $scriptPath"
         
         # Determine removal flag
         $removeFlag = if ($KeepContainer) { "" } else { "--rm" }
         
-        # Run container with installation script
+        # Run container with installation script using pre-built Ruby image
         Write-Host "Starting container: $ContainerName"
-        Write-Host "Base image: $BaseImage"
+        Write-Host "Ruby image: $RubyImageTag"
         
         $dockerArgs = @(
             "run"
@@ -237,7 +280,7 @@ function Run-DockerContainer {
             if ($removeFlag) { $removeFlag }
             "--name", $ContainerName
             "-v", "${scriptDir}:C:\setup"
-            $BaseImage
+            $RubyImageTag
             "powershell", "-ExecutionPolicy", "Bypass", "-File", "C:\setup\install-script.ps1"
         ) | Where-Object { $_ -ne $null -and $_ -ne "" }
         
@@ -288,8 +331,8 @@ function Show-Usage {
 === Ruby $RubyVersion & chef-powershell $ChefPowerShellVersion Container Test ===
 
 This script will:
-1. Create a Windows Server Core 2022 Docker container
-2. Install Ruby $RubyVersion using OneClickInstaller2
+1. Check for existing Ruby $RubyVersion Docker image (builds if needed)
+2. Run container with pre-installed Ruby $RubyVersion + Devkit
 3. Install chef-powershell gem $ChefPowerShellVersion
 4. Drop you into an interactive PowerShell session in the container
 
@@ -298,6 +341,7 @@ Available commands in the container:
   gem list chef-powershell         # List chef-powershell gems
   ruby -e "require 'chef/powershell'; puts 'OK'"  # Test gem loading
   
+Ruby image: $RubyImageTag
 Container name: $ContainerName
 Auto-remove: $(-not $KeepContainer)
 "@
