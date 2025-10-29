@@ -12,7 +12,7 @@
     Ruby version to install (default: 3.1.7)
 
 .PARAMETER ChefPowerShellVersion
-    chef-powershell gem version (default: 3.1.7)
+    chef-powershell gem version (default: latest)
 
 .PARAMETER ContainerName
     Name for the Docker container (default: ruby-chef-ps-test)
@@ -23,12 +23,13 @@
 .EXAMPLE
     .\run-ruby-test.ps1
     .\run-ruby-test.ps1 -RubyVersion "3.1.6" -ChefPowerShellVersion "3.1.6"
+    .\run-ruby-test.ps1 -ChefPowerShellVersion "latest"
     .\run-ruby-test.ps1 -ContainerName "my-ruby-test" -KeepContainer
 #>
 
 param(
     [string]$RubyVersion = "3.1.7",
-    [string]$ChefPowerShellVersion = "3.1.7",
+    [string]$ChefPowerShellVersion = "latest",
     [string]$ContainerName = "ruby-chef-ps-test",
     [switch]$KeepContainer
 )
@@ -133,13 +134,24 @@ try {
 }
 
 # Install chef-powershell gem
-Write-Host "Installing chef-powershell gem $ChefPowerShellVersion..."
-try {
-    & "`$rubyBinPath\gem.cmd" install chef-powershell -v $ChefPowerShellVersion --no-document --quiet --no-verbose
-    Write-Host "chef-powershell gem installed successfully!" -ForegroundColor Green
-} catch {
-    Write-Host "Failed to install chef-powershell gem: `$(`$_.Exception.Message)" -ForegroundColor Red
-    exit 1
+if (`$ChefPowerShellVersion -eq "latest") {
+    Write-Host "Installing latest chef-powershell gem..."
+    try {
+        & "`$rubyBinPath\gem.cmd" install chef-powershell --no-document --quiet --no-verbose
+        Write-Host "chef-powershell gem (latest) installed successfully!" -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to install chef-powershell gem: `$(`$_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "Installing chef-powershell gem $ChefPowerShellVersion..."
+    try {
+        & "`$rubyBinPath\gem.cmd" install chef-powershell -v $ChefPowerShellVersion --no-document --quiet --no-verbose
+        Write-Host "chef-powershell gem $ChefPowerShellVersion installed successfully!" -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to install chef-powershell gem: `$(`$_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Test installation
