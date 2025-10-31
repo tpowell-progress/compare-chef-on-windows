@@ -251,6 +251,114 @@ args:
   CHEF_VERSION: "17.10.0"  # Change to desired version
 ```
 
+## Additional Testing Scripts
+
+### run-ruby-test.ps1
+
+Tests chef-powershell gem installation in a Windows Server Core 2022 Docker container with Ruby installed via RubyInstaller2. This script is useful for testing chef-powershell gem compatibility with specific Ruby versions without a full Chef installation.
+
+**Features:**
+
+- Installs Ruby+Devkit from RubyInstaller2 (default: 3.1.7)
+- Caches Docker images by Ruby version to avoid re-downloading Ruby on subsequent runs
+- Supports installing chef-powershell from RubyGems (specific version or latest)
+- Supports installing chef-powershell from a local .gem file
+- Runs test suite from `test-chef-ps.rb` to validate gem functionality
+- Provides interactive debugging session in the container after tests complete
+
+**Usage:**
+
+Install latest chef-powershell:
+
+```powershell
+.\run-ruby-test.ps1
+```
+
+Install specific chef-powershell version:
+
+```powershell
+.\run-ruby-test.ps1 -ChefPowerShellVersion "1.0.38"
+```
+
+Install from local gem file:
+
+```powershell
+.\run-ruby-test.ps1 -ChefPowerShellGemPath ".\chef-powershell-1.0.38.gem"
+```
+
+Use different Ruby version:
+
+```powershell
+.\run-ruby-test.ps1 -RubyVersion "3.2.0"
+```
+
+Keep container running after tests:
+
+```powershell
+.\run-ruby-test.ps1 -KeepContainer
+```
+
+**What it does:**
+
+1. Checks if a Docker image exists for the specified Ruby version
+2. If not, creates a new image by:
+   - Starting a Windows Server Core 2022 container
+   - Downloading and installing Ruby+Devkit with silent installation
+   - Committing the container as a tagged image (e.g., `ruby-devkit:3.1.7-windows`)
+3. Installs chef-powershell gem from RubyGems or local file
+4. Copies and runs `test-chef-ps.rb` test suite
+5. Drops into an interactive PowerShell session for debugging
+
+### run-simple-test.ps1
+
+Tests Chef MSI installations in a Windows Server Core 2022 Docker container and validates chef-powershell functionality using Chef's embedded Ruby.
+
+**Features:**
+
+- Installs Chef from an MSI file
+- Runs a test Chef recipe to verify installation
+- Automatically executes `test-chef-ps.rb` test suite using Chef's embedded Ruby
+- Provides interactive debugging on test failures
+- Validates chef-powershell gem works with Chef's embedded Ruby environment
+
+**Usage:**
+
+Test with Chef MSI file:
+
+```powershell
+.\run-simple-test.ps1 -MsiFile "chef-18.8.11-1-x64.msi"
+```
+
+With full path:
+
+```powershell
+.\run-simple-test.ps1 -MsiFile "C:\downloads\chef-18.8.46-1-x64.msi"
+```
+
+**What it does:**
+
+1. Creates a Windows Server Core 2022 container with shared volume
+2. Copies the MSI file into the container
+3. Installs Chef from the MSI file
+4. Runs `chef-client` with a test recipe to verify Chef works
+5. Copies `test-chef-ps.rb` to the shared volume
+6. Executes the test suite using Chef's embedded Ruby (`C:\opscode\chef\embedded\bin\ruby.exe`)
+7. Reports test results and provides interactive debugging if tests fail
+
+### test-chef-ps.rb
+
+Shared Ruby test suite used by both `run-ruby-test.ps1` and `run-simple-test.ps1` to validate chef-powershell gem functionality.
+
+**Tests performed:**
+
+- Lists all installed gems matching 'powershell'
+- Displays chef-powershell gem specification (version, authors, install location, etc.)
+- Loads the chef-powershell gem
+- Executes PowerShell commands via the gem (`Get-Date`, `Get-Process`, `Get-ChildItem`)
+- Validates output from PowerShell commands
+
+This modular test file ensures consistent validation across different installation methods (standalone Ruby vs Chef's embedded Ruby).
+
 ## Cleanup
 
 Remove generated images and containers:
@@ -261,6 +369,7 @@ docker-compose down
 
 # Remove images
 docker rmi chef-test:18.8.11 chef-test:18.8.46
+docker rmi ruby-devkit:3.1.7-windows
 
 # Clean shared directory
 Remove-Item .\shared\chef-*.txt
