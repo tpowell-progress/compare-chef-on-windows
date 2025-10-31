@@ -14,6 +14,9 @@
 .PARAMETER ChefPowerShellVersion
     chef-powershell gem version (default: latest)
 
+.PARAMETER ChefPowerShellGemPath
+    Path to local chef-powershell*.gem file to install instead of downloading from RubyGems
+
 .PARAMETER ContainerName
     Name for the Docker container (default: ruby-chef-ps-test)
 
@@ -24,12 +27,14 @@
     .\run-ruby-test.ps1
     .\run-ruby-test.ps1 -RubyVersion "3.1.6" -ChefPowerShellVersion "3.1.6"
     .\run-ruby-test.ps1 -ChefPowerShellVersion "latest"
+    .\run-ruby-test.ps1 -ChefPowerShellGemPath "C:\path\to\chef-powershell-3.2.0.gem"
     .\run-ruby-test.ps1 -ContainerName "my-ruby-test" -KeepContainer
 #>
 
 param(
     [string]$RubyVersion = "3.1.7",
     [string]$ChefPowerShellVersion = "latest",
+    [string]$ChefPowerShellGemPath,
     [string]$ContainerName = "ruby-chef-ps-test",
     [switch]$KeepContainer
 )
@@ -87,52 +92,51 @@ function Test-RubyImageExists {
 function Build-RubyImage {
     param([string]$ImageTag)
     
-    Write-Status "Building Ruby $RubyVersion Docker image"
+    Write-Status "Building Ruby $RubyVersion Docker image using commit approach"
     
-    # Create Dockerfile for Ruby installation
-    $dockerfile = @"
-FROM $BaseImage
-
-# Set environment variables
-ENV RUBY_URL=$RubyInstallerUrl
-ENV RUBY_INSTALL_PATH=$RubyInstallPath
-
-# Download and install Ruby with Devkit
-RUN powershell -Command "Write-Host 'Downloading Ruby installer...'; Invoke-WebRequest -Uri `$env:RUBY_URL -OutFile C:\rubyinstaller.exe -UseBasicParsing"
-RUN powershell -Command "Write-Host 'Installing Ruby $RubyVersion with Devkit...'; Start-Process -FilePath C:\rubyinstaller.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NOCLOSEAPPLICATIONS', '/NORESTART', '/NOCANCEL', '/SP-', '/DIR=`$env:RUBY_INSTALL_PATH', '/TASKS=assocfiles,modpath,devkit' -Wait -NoNewWindow"
-RUN powershell -Command "Remove-Item C:\rubyinstaller.exe -Force"
-
-# Update PATH
-RUN setx PATH "%PATH%;$RubyInstallPath\bin" /M
-
-# Test Ruby installation
-RUN powershell -Command "`$env:PATH = '$RubyInstallPath\bin;' + `$env:PATH; ruby --version; gem --version"
-
-# Set default shell
-SHELL ["powershell", "-Command"]
-"@
-
     try {
-        # Create temporary directory for Docker build
-        $buildDir = Join-Path $env:TEMP "ruby-docker-build"
-        if (-not (Test-Path $buildDir)) {
-            New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
+        # Create a temporary container name for building
+        $buildContainerName = "ruby-build-temp-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        
+        # Create installation script
+        $buildScript = Create-RubyInstallationScript
+        $scriptDir = Join-Path $env:TEMP "ruby-build-setup"
+        if (-not (Test-Path $scriptDir)) {
+            New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
         }
         
-        $dockerfilePath = Join-Path $buildDir "Dockerfile"
-        $dockerfile | Out-File -FilePath $dockerfilePath -Encoding utf8
+        $scriptPath = Join-Path $scriptDir "install-ruby.ps1"
+        $buildScript | Out-File -FilePath $scriptPath -Encoding UTF8
         
-        Write-Host "Created Dockerfile at: $dockerfilePath"
-        Write-Host "Building image: $ImageTag"
+        Write-Host "Created Ruby installation script at: $scriptPath"
+        Write-Host "Starting build container: $buildContainerName"
         
-        # Build the Docker image
-        $buildResult = docker build -t $ImageTag $buildDir 2>&1
+        # Run container to install Ruby
+        $dockerArgs = @(
+            "run"
+            "--name", $buildContainerName
+            "-v", "${scriptDir}:C:\setup"
+            $BaseImage
+            "powershell", "-ExecutionPolicy", "Bypass", "-File", "C:\setup\install-ruby.ps1"
+        )
+        
+        Write-Host "Running: docker $($dockerArgs -join ' ')"
+        & docker @dockerArgs
         
         if ($LASTEXITCODE -ne 0) {
-            throw "Docker build failed with exit code: $LASTEXITCODE`n$buildResult"
+            throw "Ruby installation in build container failed with exit code: $LASTEXITCODE"
         }
         
-        Write-Status "Ruby image $ImageTag built successfully" "Green"
+        Write-Host "Ruby installation completed, committing container as image..."
+        
+        # Commit the container as a new image
+        & docker commit $buildContainerName $ImageTag
+        
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to commit container as image with exit code: $LASTEXITCODE"
+        }
+        
+        Write-Status "Ruby image $ImageTag created successfully" "Green"
         return $true
         
     }
@@ -141,11 +145,85 @@ SHELL ["powershell", "-Command"]
         throw
     }
     finally {
-        # Cleanup build directory
-        if (Test-Path $buildDir) {
-            Remove-Item $buildDir -Recurse -Force -ErrorAction SilentlyContinue
+        # Cleanup build container and temp files
+        if ($buildContainerName) {
+            docker rm -f $buildContainerName 2>$null | Out-Null
+        }
+        if (Test-Path $scriptDir) {
+            Remove-Item $scriptDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+function Create-RubyInstallationScript {
+    Write-Status "Creating Ruby installation script for image building"
+    
+    $installScript = @"
+# Ruby installation script for image building
+Write-Host "=== Starting Ruby $RubyVersion installation for image ==="
+
+# Download Ruby installer
+Write-Host "Downloading Ruby installer..."
+`$rubyUrl = "$RubyInstallerUrl"
+`$installerPath = "C:\rubyinstaller.exe"
+
+try {
+    Invoke-WebRequest -Uri `$rubyUrl -OutFile `$installerPath -UseBasicParsing
+    Write-Host "Downloaded Ruby installer successfully"
+} catch {
+    Write-Host "Failed to download Ruby installer: `$(`$_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# Install Ruby with Devkit silently
+Write-Host "Installing Ruby $RubyVersion with Devkit..."
+`$installArgs = @(
+    "/VERYSILENT",
+    "/SUPPRESSMSGBOXES",
+    "/NOCLOSEAPPLICATIONS",
+    "/NORESTART", 
+    "/NOCANCEL",
+    "/SP-",
+    "/DIR=$RubyInstallPath",
+    "/TASKS=assocfiles,modpath,devkit"
+)
+
+try {
+    Write-Host "Running installer with args: `$(`$installArgs -join ' ')"
+    `$process = Start-Process -FilePath `$installerPath -ArgumentList `$installArgs -Wait -PassThru -NoNewWindow
+    Write-Host "Installer process completed with exit code: `$(`$process.ExitCode)"
+    if (`$process.ExitCode -ne 0) {
+        throw "Ruby installer failed with exit code: `$(`$process.ExitCode)"
+    }
+    Write-Host "Ruby installed successfully!" -ForegroundColor Green
+} catch {
+    Write-Host "Ruby installation failed: `$(`$_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# Update PATH and refresh environment
+`$rubyBinPath = "$RubyInstallPath\bin"
+[Environment]::SetEnvironmentVariable("PATH", [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";`$rubyBinPath", "Machine")
+
+# Verify Ruby installation
+try {
+    if (Test-Path "`$rubyBinPath\ruby.exe") {
+        Write-Host "Ruby executable verified at: `$rubyBinPath\ruby.exe" -ForegroundColor Green
+    } else {
+        throw "Ruby executable not found at expected location"
+    }
+} catch {
+    Write-Host "Warning: Could not verify Ruby installation" -ForegroundColor Yellow
+    exit 1
+}
+
+# Cleanup installer
+Remove-Item `$installerPath -Force -ErrorAction SilentlyContinue
+
+Write-Host "=== Ruby $RubyVersion installation for image completed successfully ==="
+"@
+
+    return $installScript
 }
 
 function Create-InstallationScript {
@@ -170,7 +248,21 @@ try {
 }
 
 # Install chef-powershell gem
-if (`$ChefPowerShellVersion -eq "latest") {
+if ("$ChefPowerShellGemPath" -ne "") {
+    Write-Host "Installing chef-powershell from local gem file: $ChefPowerShellGemPath..."
+    if (Test-Path "C:\setup\chef-powershell.gem") {
+        try {
+            & "`$rubyBinPath\gem.cmd" install "C:\setup\chef-powershell.gem" --no-document --quiet --no-verbose --force
+            Write-Host "chef-powershell gem installed from local file successfully!" -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to install chef-powershell gem from local file: `$(`$_.Exception.Message)" -ForegroundColor Red
+            exit 1
+        }
+    } else {
+        Write-Host "Error: Local gem file not found at C:\setup\chef-powershell.gem" -ForegroundColor Red
+        exit 1
+    }
+} elseif ("$ChefPowerShellVersion" -eq "latest") {
     Write-Host "Installing latest chef-powershell gem..."
     try {
         & "`$rubyBinPath\gem.cmd" install chef-powershell --no-document --quiet --no-verbose
@@ -190,37 +282,25 @@ if (`$ChefPowerShellVersion -eq "latest") {
     }
 }
 
-# Test installation
-Write-Host "Testing chef-powershell installation..."
+# Test installation using external test file
+Write-Host "Running chef-powershell test suite..."
 try {
     `$gemList = & "`$rubyBinPath\gem.cmd" list chef-powershell
     Write-Host "Installed gems: `$gemList" -ForegroundColor Cyan
     
-    # Test requiring the gem
-    `$testScript = @'
-begin
-  require \"chef-powershell\"
-  puts \"chef-powershell loaded successfully\"
-  puts \"Chef::PowerShell::VERSION = #{Chef::PowerShell::VERSION}\" if defined?(Chef::PowerShell::VERSION)
-  puts \"include ChefPowerShell::ChefPowerShellModule::PowerShellExec\"
-  puts \"powershell_exec('Get-Date')\"
-rescue LoadError => e
-  puts \"Failed to load chef-powershell: #{e.message}\"
-  exit 1
-rescue => e
-  puts \"Error testing chef-powershell: #{e.message}\"
-  exit 1
-end
-'@
-    
-    `$testResult = & "`$rubyBinPath\ruby.exe" -e `$testScript
-    Write-Host "Test result: `$testResult" -ForegroundColor Green
+    # Run external test file
+    Write-Host "Executing test-chef-ps.rb test suite..."
+    if (Test-Path "C:\setup\test-chef-ps.rb") {
+        `$testResult = & "`$rubyBinPath\ruby.exe" "C:\setup\test-chef-ps.rb"
+        Write-Host "Test suite completed" -ForegroundColor Green
+    } else {
+        Write-Host "Warning: test-chef-ps.rb not found, running basic test..." -ForegroundColor Yellow
+        `$basicTest = & "`$rubyBinPath\ruby.exe" -e "require 'chef/powershell'; puts 'chef-powershell loaded successfully'"
+        Write-Host "Basic test result: `$basicTest" -ForegroundColor Green
+    }
 } catch {
     Write-Host "chef-powershell test failed: `$(`$_.Exception.Message)" -ForegroundColor Yellow
 }
-
-# Cleanup installer
-Remove-Item `$installerPath -Force -ErrorAction SilentlyContinue
 
 Write-Host "=== Installation completed! ==="
 Write-Host "Ruby $RubyVersion and chef-powershell $ChefPowerShellVersion are ready for testing"
@@ -259,6 +339,38 @@ function Run-DockerContainer {
         $scriptDir = Join-Path $env:TEMP "ruby-container-setup"
         if (-not (Test-Path $scriptDir)) {
             New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+        }
+        
+        # Copy the test file to the shared directory
+        $scriptLocation = $PSScriptRoot
+        if (-not $scriptLocation) {
+            $scriptLocation = Split-Path -Parent $MyInvocation.MyCommand.Definition
+        }
+        if (-not $scriptLocation) {
+            $scriptLocation = Get-Location
+        }
+        
+        $testFilePath = Join-Path $scriptLocation "test-chef-ps.rb"
+        $targetTestPath = Join-Path $scriptDir "test-chef-ps.rb"
+        
+        if (Test-Path $testFilePath) {
+            Copy-Item $testFilePath $targetTestPath -Force
+            Write-Host "Copied test-chef-ps.rb to shared volume"
+        } else {
+            Write-Host "Warning: test-chef-ps.rb not found at $testFilePath" -ForegroundColor Yellow
+            Write-Host "Searched in: $scriptLocation" -ForegroundColor Yellow
+        }
+        
+        # Copy local gem file if specified
+        if ($ChefPowerShellGemPath) {
+            if (Test-Path $ChefPowerShellGemPath) {
+                $targetGemPath = Join-Path $scriptDir "chef-powershell.gem"
+                Copy-Item $ChefPowerShellGemPath $targetGemPath -Force
+                Write-Host "Copied local gem file to shared volume: $ChefPowerShellGemPath"
+            } else {
+                Write-Error-Status "Local gem file not found: $ChefPowerShellGemPath"
+                throw "Gem file path specified but file does not exist"
+            }
         }
         
         $installScript = Create-InstallationScript
@@ -327,19 +439,27 @@ function Run-DockerContainer {
 }
 
 function Show-Usage {
+    $gemSource = if ($ChefPowerShellGemPath) { 
+        "local gem file: $ChefPowerShellGemPath" 
+    } else { 
+        "version $ChefPowerShellVersion from RubyGems" 
+    }
+    
     Write-Host @"
-=== Ruby $RubyVersion & chef-powershell $ChefPowerShellVersion Container Test ===
+=== Ruby $RubyVersion & chef-powershell Container Test ===
 
 This script will:
 1. Check for existing Ruby $RubyVersion Docker image (builds if needed)
 2. Run container with pre-installed Ruby $RubyVersion + Devkit
-3. Install chef-powershell gem $ChefPowerShellVersion
-4. Drop you into an interactive PowerShell session in the container
+3. Install chef-powershell gem from $gemSource
+4. Run comprehensive test suite (test-chef-ps.rb)
+5. Drop you into an interactive PowerShell session in the container
 
 Available commands in the container:
   ruby --version                    # Check Ruby version
   gem list chef-powershell         # List chef-powershell gems
-  ruby -e "require 'chef/powershell'; puts 'OK'"  # Test gem loading
+  ruby test-chef-ps.rb             # Run comprehensive test suite
+  ruby -e "require 'chef/powershell'; puts 'OK'"  # Quick test
   
 Ruby image: $RubyImageTag
 Container name: $ContainerName

@@ -39,6 +39,15 @@ if (Test-Path ".\shared") {
     New-Item -ItemType Directory -Path ".\shared" | Out-Null
 }
 
+# Copy test file to shared directory
+$testFile = ".\test-chef-ps.rb"
+if (Test-Path $testFile) {
+    Copy-Item $testFile ".\shared\test-chef-ps.rb" -Force
+    Write-Host "Copied test-chef-ps.rb to shared directory" -ForegroundColor Green
+} else {
+    Write-Host "Warning: test-chef-ps.rb not found in current directory" -ForegroundColor Yellow
+}
+
 # Copy MSI to root directory as chef-installer.msi for Dockerfile
 $tempMsi = ".\chef-installer.msi"
 Copy-Item $msiPath $tempMsi -Force
@@ -117,6 +126,53 @@ if ($LASTEXITCODE -ne 0) {
     
     Play-CompletionSound -Success $false
     exit 1
+}
+
+# Run chef-powershell test suite
+Write-Host "`n=== Running chef-powershell test suite ===" -ForegroundColor Green
+if (Test-Path ".\shared\test-chef-ps.rb") {
+    docker run --rm `
+        -e CHEF_LICENSE=accept-silent `
+        -v "${PWD}\shared:C:\shared" `
+        chef-test:$imageTag `
+        powershell -Command {
+            Write-Host "=== Chef PowerShell Test Suite ==="
+            $rubyPath = "C:\opscode\chef\embedded\bin\ruby.exe"
+            $testFile = "C:\shared\test-chef-ps.rb"
+            
+            if (Test-Path $rubyPath) {
+                Write-Host "Ruby path: $rubyPath"
+                Write-Host "Running test file: $testFile"
+                Write-Host ""
+                & $rubyPath $testFile
+                
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "`nTest suite failed with exit code: $LASTEXITCODE" -ForegroundColor Red
+                    exit $LASTEXITCODE
+                } else {
+                    Write-Host "`nTest suite completed successfully" -ForegroundColor Green
+                }
+            } else {
+                Write-Host "Error: Ruby not found at $rubyPath" -ForegroundColor Red
+                exit 1
+            }
+        }
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "`nchef-powershell test suite failed" -ForegroundColor Red
+        Write-Host "Starting interactive container for debugging..." -ForegroundColor Yellow
+        
+        docker run --rm -it `
+            -e CHEF_LICENSE=accept-silent `
+            -v "${PWD}\shared:C:\shared" `
+            chef-test:$imageTag `
+            powershell
+        
+        Play-CompletionSound -Success $false
+        exit 1
+    }
+} else {
+    Write-Host "Warning: test-chef-ps.rb not found in shared directory, skipping test suite" -ForegroundColor Yellow
 }
 
 Write-Host "`n=== Test completed successfully ===" -ForegroundColor Green
